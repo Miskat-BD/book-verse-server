@@ -57,6 +57,7 @@ async function startServer() {
 
 const database = client.db(process.env.DB_NAME)
 const userCollection = database.collection('user')
+const booksCollection = database.collection('books')
 
 
 app.get('/', (req: Request, res: Response) => {
@@ -66,6 +67,12 @@ app.get('/', (req: Request, res: Response) => {
 app.get('/users', async (req: Request, res: Response) => {
     const cursor = userCollection.find()
     const result = await cursor.toArray()
+    res.send(result)
+})
+
+app.post('/books', async (req:Request, res:Response)=>{
+    const data = req.body
+    const result = await booksCollection.insertOne(data)
     res.send(result)
 })
 
