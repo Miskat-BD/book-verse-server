@@ -1,8 +1,7 @@
-// book-verse-server/src/app.ts
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { MongoClient, ServerApiVersion, Db } from 'mongodb';
+import { MongoClient, ServerApiVersion, Db, Collection, Document } from 'mongodb';
 
 dotenv.config();
 
@@ -19,74 +18,99 @@ app.use(cors({
 app.use(express.json());
 
 // =====================================
-// MongoDB Native Connection Pool Setup
+// MongoDB Connection Setup
 // =====================================
 const uri = process.env.MONGO_DB_URI;
 if (!uri) {
     throw new Error('❌ MONGO_DB_URI is missing from .env file!');
 }
 
-const client = new MongoClient(uri, {
-    serverApi: {
-        version: ServerApiVersion.v1,
-        strict: true,
-        deprecationErrors: true,
+// সার্ভারলেস আর্কিটেকচারের জন্য গ্লোবাল কানেকশন ক্যাশ
+let client: MongoClient | null = null;
+let db: Db | null = null;
+
+// রাউটের ভেতর কল করার জন্য ডাইনামিক ডাটাবেস ম্যানেজার
+async function getCollections(): Promise<{ userCollection: Collection<Document>; booksCollection: Collection<Document> }> {
+    const dbName = process.env.DB_NAME || 'book-verse';
+    
+    // যদি অলরেডি কানেকশন চালু থাকে, তবে নতুন করে কানেক্ট না করে ক্যাশড অবজেক্ট রিটার্ন করবে
+    if (client && db) {
+        return {
+            userCollection: db.collection('user'),
+            booksCollection: db.collection('books')
+        };
     }
-});
 
-// গ্লোবাল ডাটাবেস অবজেক্ট যা সব রুট ব্যবহার করতে পারবে
-export let db: Db;
+    // কানেকশন না থাকলে সার্ভারলেস ইনস্ট্যান্সের জন্য নতুন কানেকশন তৈরি করবে
+    client = new MongoClient(uri!, {
+        serverApi: {
+            version: ServerApiVersion.v1,
+            strict: true,
+            deprecationErrors: true,
+        }
+    });
 
-// ডাটাবেস কানেক্ট করার র্যাপার ফাংশন
-async function startServer() {
-    try {
-        await client.connect();
-        // কানেকশন সাকসেস হলে ডিফল্ট ডাটাবেস অ্যাসাইন হবে
-        db = client.db('bookverse');
-        console.log('🚀 Successfully connected to MongoDB via Native Driver!');
+    await client.connect();
+    db = client.db(dbName);
+    console.log(`🚀 Successfully connected to MongoDB Database: ${dbName}`);
 
-        // ডাটাবেস রেডি হওয়ার পরই কেবল এক্সপ্রেস রিকোয়েস্ট লিসেন করা শুরু করবে
-        app.listen(PORT, () => {
-            console.log(`📡 BookVerse Server is actively running on: http://localhost:${PORT}`);
-        });
-    } catch (error) {
-        console.error('❌ MongoDB Connection Failed:', error);
-        process.exit(1);
-    }
+    return {
+        userCollection: db.collection('user'),
+        booksCollection: db.collection('books')
+    };
 }
 
-const database = client.db(process.env.DB_NAME)
-const userCollection = database.collection('user')
-const booksCollection = database.collection('books')
-
-
-app.get('/', (req: Request, res: Response) => {
+// =====================================
+// API Routes
+// =====================================
+app.get('/', (req: Request, res: Response): void => {
     res.send("Hello World");
 });
 
-app.get('/users', async (req: Request, res: Response) => {
-    const cursor = userCollection.find()
-    const result = await cursor.toArray()
-    res.send(result)
-})
+app.get('/users', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { userCollection } = await getCollections();
+        const cursor = userCollection.find();
+        const result = await cursor.toArray();
+        res.send(result);
+    } catch (error: any) {
+        res.status(500).json({ status: 'error', message: error.message });
+    }
+});
 
-app.post('/books', async (req:Request, res:Response)=>{
-    const data = req.body
-    const result = await booksCollection.insertOne(data)
-    res.send(result)
-})
+app.get('/api/books', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { booksCollection } = await getCollections();
+        const cursor = booksCollection.find();
+        const result = await cursor.toArray();
+        res.send(result);
+    } catch (error: any) {
+        res.status(500).json({ status: 'error', message: error.message });
+    }
+});
+
+app.post('/books', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { booksCollection } = await getCollections();
+        const data = req.body as Document;
+        const result = await booksCollection.insertOne(data);
+        res.send(result);
+    } catch (error: any) {
+        res.status(500).json({ status: 'error', message: error.message });
+    }
+});
 
 // =====================================
 // Global 404 & Error Handlers
 // =====================================
-app.use((req: Request, res: Response) => {
+app.use((req: Request, res: Response): void => {
     res.status(404).json({
         status: 'fail',
         message: `Can't find ${req.originalUrl} on this server!`
     });
 });
 
-app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+app.use((err: Error, req: Request, res: Response, next: NextFunction): void => {
     console.error('💥 Server Error:', err);
     res.status(500).json({
         status: 'error',
@@ -94,6 +118,11 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
     });
 });
 
-startServer();
+// লোকালহোস্টে রান করার জন্য অ্যাপ লিসেনার (ভার্সেলে এটি অটো ইগনোরড হবে)
+if (process.env.NODE_ENV !== 'production') {
+    app.listen(PORT, () => {
+        console.log(`📡 BookVerse Server is actively running on: http://localhost:${PORT}`);
+    });
+}
 
 export default app;
