@@ -118,14 +118,17 @@ app.get('/api/books/:id', async (req: Request, res: Response): Promise<any> => {
     }
 });
 
-// app.get('/books/:userId', async (req: Request, res: Response) => {
-//     const { userId } = req.params
-//     const query = {
-//         userId: new ObjectId(userId)
-//     }
-//     const result = await booksCollection.findOne(query)
-//     res.send(result)
-// })
+app.get('/api/books/user/:userId', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { userId } = req.params;
+        const { booksCollection } = await getCollections();
+        const query = { userId: userId };
+        const result = await booksCollection.find(query).toArray();
+        res.send(result);
+    } catch (error: any) {
+        res.status(500).json({ status: 'error', message: error.message });
+    }
+});
 
 // =====================================
 // Global 404 & Error Handlers
